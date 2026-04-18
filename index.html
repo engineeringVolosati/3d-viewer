@@ -2,25 +2,34 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>3D Viewer</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: 100%; height: 100%; background: #1a1a1a; overflow: hidden; }
+  html, body { width: 100%; height: 100%; background: #1a1a1a; overflow: hidden; touch-action: none; }
   canvas { display: block; }
   #info {
-    position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
-    color: #666; font-family: sans-serif; font-size: 12px; pointer-events: none;
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    color: #555; font-family: sans-serif; font-size: 12px;
+    pointer-events: none; text-align: center; white-space: nowrap;
   }
   #loading {
     position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
     color: #aaa; font-family: sans-serif; font-size: 14px;
+    text-align: center; line-height: 2;
   }
+  #bar {
+    width: 200px; height: 3px; background: #333; border-radius: 2px; margin: 8px auto 0;
+  }
+  #bar-fill { height: 100%; width: 0; background: #4af; border-radius: 2px; transition: width 0.2s; }
 </style>
 </head>
 <body>
-<div id="loading">Loading…</div>
-<div id="info">drag to rotate · scroll to zoom · right-click to pan</div>
+<div id="loading">
+  Loading model…
+  <div id="bar"><div id="bar-fill"></div></div>
+</div>
+<div id="info"></div>
 
 <script type="importmap">
 {
@@ -35,26 +44,38 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const MODEL_URL = 'https://github.com/engineeringVolosati/3d-viewer/releases/download/v1.0/model.glb';
+const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+document.getElementById('info').textContent = isMobile
+  ? '1 finger: rotate · pinch: zoom · 2 fingers: pan'
+  : 'drag: rotate · scroll: zoom · right-drag: pan';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x1a1a1a);
-scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-const dir = new THREE.DirectionalLight(0xffffff, 1.2);
-dir.position.set(5, 10, 7);
-scene.add(dir);
+scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+sun.position.set(5, 10, 7);
+scene.add(sun);
+const fill = new THREE.DirectionalLight(0xffffff, 0.4);
+fill.position.set(-5, -2, -5);
+scene.add(fill);
 
-const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.001, 10000);
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.001, 100000);
 camera.position.set(1, 1, 2);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.screenSpacePanning = true;
+controls.touches = {
+  ONE: THREE.TOUCH.ROTATE,
+  TWO: THREE.TOUCH.DOLLY_PAN
+};
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -62,22 +83,44 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
+const params = new URLSearchParams(window.location.search);
+const modelUrl = params.get('model') || 'model.glb';
+
 const loader = new GLTFLoader();
-loader.load(MODEL_URL, (gltf) => {
+loader.load(modelUrl, (gltf) => {
+  gltf.scene.traverse((child) => {
+    if (child.isMesh) {
+      child.material.vertexColors = true;
+      if (child.material.transparent) {
+        child.material.depthWrite = false;
+      }
+    }
+  });
+
   const box = new THREE.Box3().setFromObject(gltf.scene);
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3()).length();
   gltf.scene.position.sub(center);
-  camera.position.set(0, 0, size * 1.5);
+
+  camera.position.set(0, size * 0.3, size * 1.4);
+  camera.near = size * 0.001;
+  camera.far = size * 10;
+  camera.updateProjectionMatrix();
   controls.target.set(0, 0, 0);
+  controls.minDistance = size * 0.01;
+  controls.maxDistance = size * 5;
   controls.update();
+
   scene.add(gltf.scene);
   document.getElementById('loading').style.display = 'none';
 }, (xhr) => {
-  const pct = Math.round(xhr.loaded / xhr.total * 100);
-  document.getElementById('loading').textContent = `Loading… ${pct}%`;
+  if (xhr.total) {
+    const pct = Math.round(xhr.loaded / xhr.total * 100);
+    document.getElementById('loading').childNodes[0].textContent = `Loading… ${pct}%`;
+    document.getElementById('bar-fill').style.width = pct + '%';
+  }
 }, (err) => {
-  document.getElementById('loading').textContent = 'Error loading model';
+  document.getElementById('loading').textContent = 'Error: ' + (err.message || err);
   console.error(err);
 });
 
