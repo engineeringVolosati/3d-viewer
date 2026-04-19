@@ -20,11 +20,37 @@
   }
   #bar { width: 200px; height: 3px; background: #333; border-radius: 2px; margin: 8px auto 0; }
   #bar-fill { height: 100%; width: 0; background: #4af; border-radius: 2px; transition: width 0.2s; }
+  #fence-toggle {
+    display: none;
+    position: fixed; top: 16px; right: 16px;
+    background: #2a2a2a; border: 1px solid #444; border-radius: 24px;
+    padding: 6px 14px 6px 10px;
+    color: #ccc; font-family: sans-serif; font-size: 12px;
+    cursor: pointer; user-select: none;
+    align-items: center; gap: 8px;
+    touch-action: manipulation;
+  }
+  #fence-toggle:active { background: #383838; }
+  .toggle-pill {
+    width: 32px; height: 18px; border-radius: 9px;
+    background: #555; position: relative; transition: background 0.2s; flex-shrink: 0;
+  }
+  .toggle-pill::after {
+    content: ''; position: absolute; top: 3px; left: 3px;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: #aaa; transition: left 0.2s, background 0.2s;
+  }
+  #fence-toggle.white .toggle-pill { background: #4af; }
+  #fence-toggle.white .toggle-pill::after { left: 17px; background: #fff; }
 </style>
 </head>
 <body>
 <div id="loading">Loading model…<div id="bar"><div id="bar-fill"></div></div></div>
 <div id="info"></div>
+<div id="fence-toggle" onclick="toggleFence()">
+  <div class="toggle-pill"></div>
+  <span id="fence-label">Забор: дерево</span>
+</div>
 
 <script type="importmap">
 {
@@ -172,6 +198,32 @@ function applyWorldUV(mesh, texture, scaleMeters) {
   });
 }
 
+// ── Fence toggle ──────────────────────────────────────────────────────────
+const fenceMeshes = [];
+let fenceWhite = false;
+const WHITE_MAT = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+
+function isFenceColor(mesh) {
+  // Pine wood COLOR_FENCE = uint8(140, 97, 38) — check first vertex color
+  const vc = mesh.geometry.attributes.color;
+  if (!vc) return false;
+  const r = Math.round(vc.getX(0) * 255);
+  const g = Math.round(vc.getY(0) * 255);
+  const b = Math.round(vc.getZ(0) * 255);
+  return Math.abs(r - 140) < 12 && Math.abs(g - 97) < 12 && Math.abs(b - 38) < 12;
+}
+
+function toggleFence() {
+  fenceWhite = !fenceWhite;
+  const btn = document.getElementById('fence-toggle');
+  btn.classList.toggle('white', fenceWhite);
+  document.getElementById('fence-label').textContent = fenceWhite ? 'Забор: белый' : 'Забор: дерево';
+  fenceMeshes.forEach(({ mesh, origMat }) => {
+    mesh.material = fenceWhite ? WHITE_MAT : origMat;
+  });
+}
+window.toggleFence = toggleFence;
+
 // ── Load model ────────────────────────────────────────────────────────────
 const params = new URLSearchParams(location.search);
 const modelUrl = params.get('model') || 'model.glb';
@@ -193,6 +245,10 @@ new GLTFLoader().load(modelUrl, (gltf) => {
     child.material.vertexColors = true;
     if (child.material.transparent) child.material.depthWrite = false;
     child.material.side = THREE.DoubleSide;
+
+    if (isFenceColor(child)) {
+      fenceMeshes.push({ mesh: child, origMat: child.material });
+    }
   });
 
   const box = new THREE.Box3().setFromObject(gltf.scene);
@@ -209,6 +265,9 @@ new GLTFLoader().load(modelUrl, (gltf) => {
   controls.update();
   scene.add(gltf.scene);
   document.getElementById('loading').style.display = 'none';
+  if (fenceMeshes.length > 0) {
+    document.getElementById('fence-toggle').style.display = 'flex';
+  }
 
 }, (xhr) => {
   if (xhr.total) {
