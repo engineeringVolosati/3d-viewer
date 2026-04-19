@@ -270,10 +270,17 @@ new GLTFLoader().load(modelUrl, (gltf) => {
   }
 
 }, (xhr) => {
+  const loaded = xhr.loaded;
   if (xhr.total) {
-    const pct = Math.round(xhr.loaded / xhr.total * 100);
-    document.getElementById('loading').childNodes[0].textContent = `Loading… ${pct}%`;
+    const pct = Math.round(loaded / xhr.total * 100);
+    document.getElementById('loading').childNodes[0].textContent = `Загрузка… ${pct}%`;
     document.getElementById('bar-fill').style.width = pct + '%';
+  } else if (loaded > 0) {
+    const mb = (loaded / 1048576).toFixed(1);
+    document.getElementById('loading').childNodes[0].textContent = `Загрузка… ${mb} MB`;
+    // animate bar so user sees progress
+    const approx = Math.min(loaded / (18 * 1048576) * 100, 95);
+    document.getElementById('bar-fill').style.width = approx + '%';
   }
 }, (err) => {
   document.getElementById('loading').textContent = 'Error: ' + (err.message || err);
