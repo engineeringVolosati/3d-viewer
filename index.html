@@ -18,17 +18,12 @@
     color: #aaa; font-family: sans-serif; font-size: 14px;
     text-align: center; line-height: 2;
   }
-  #bar {
-    width: 200px; height: 3px; background: #333; border-radius: 2px; margin: 8px auto 0;
-  }
+  #bar { width: 200px; height: 3px; background: #333; border-radius: 2px; margin: 8px auto 0; }
   #bar-fill { height: 100%; width: 0; background: #4af; border-radius: 2px; transition: width 0.2s; }
 </style>
 </head>
 <body>
-<div id="loading">
-  Loading model…
-  <div id="bar"><div id="bar-fill"></div></div>
-</div>
+<div id="loading">Loading model…<div id="bar"><div id="bar-fill"></div></div></div>
 <div id="info"></div>
 
 <script type="importmap">
@@ -49,59 +44,161 @@ document.getElementById('info').textContent = isMobile
   ? '1 finger: rotate · pinch: zoom · 2 fingers: pan'
   : 'drag: rotate · scroll: zoom · right-drag: pan';
 
+// ── Renderer ──────────────────────────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 
+// ── Scene ─────────────────────────────────────────────────────────────────
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x1a1a1a);
 scene.add(new THREE.AmbientLight(0xffffff, 0.7));
 const sun = new THREE.DirectionalLight(0xffffff, 1.4);
 sun.position.set(5, 10, 7);
 scene.add(sun);
-const fill = new THREE.DirectionalLight(0xffffff, 0.4);
-fill.position.set(-5, -2, -5);
-scene.add(fill);
+scene.add(Object.assign(new THREE.DirectionalLight(0xffffff, 0.4), { position: new THREE.Vector3(-5, -2, -5) }));
 
-const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.001, 100000);
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.001, 100000);
 camera.position.set(1, 1, 2);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.screenSpacePanning = true;
-controls.touches = {
-  ONE: THREE.TOUCH.ROTATE,
-  TWO: THREE.TOUCH.DOLLY_PAN
-};
+controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
 
 window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setSize(innerWidth, innerHeight);
 });
 
-const params = new URLSearchParams(window.location.search);
+// ── Procedural textures ───────────────────────────────────────────────────
+function makeTileTexture() {
+  const S = 512, T = 64, seam = 3;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+
+  for (let row = 0; row < S / T; row++) {
+    for (let col = 0; col < S / T; col++) {
+      const x = col * T, y = row * T;
+      // Alternate: red tiles + narrow gray center strip
+      const isCenter = col % 4 === 2;
+      if (isCenter) {
+        // Gray geometric tile
+        ctx.fillStyle = '#7a7870';
+        ctx.fillRect(x + seam, y + seam, T - seam * 2, T - seam * 2);
+        // Draw star/diamond inset
+        ctx.strokeStyle = '#5a5850';
+        ctx.lineWidth = 1.5;
+        const cx2 = x + T / 2, cy2 = y + T / 2, r = T * 0.3;
+        ctx.beginPath();
+        for (let i = 0; i < 8; i++) {
+          const a = (i * Math.PI) / 4;
+          const rr = i % 2 === 0 ? r : r * 0.5;
+          i === 0 ? ctx.moveTo(cx2 + rr * Math.cos(a), cy2 + rr * Math.sin(a))
+                  : ctx.lineTo(cx2 + rr * Math.cos(a), cy2 + rr * Math.sin(a));
+        }
+        ctx.closePath();
+        ctx.stroke();
+      } else {
+        // Red/terracotta tile with subtle variation
+        const v = (row + col) % 3 === 0 ? 8 : 0;
+        ctx.fillStyle = `rgb(${168 + v}, ${68 + v}, ${48 + v})`;
+        ctx.fillRect(x + seam, y + seam, T - seam * 2, T - seam * 2);
+      }
+      // Seam (dark grout)
+      ctx.fillStyle = '#2a2018';
+      ctx.fillRect(x, y, T, seam);
+      ctx.fillRect(x, y, seam, T);
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+function makeGrassTexture() {
+  const S = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  const rng = (s) => (Math.sin(s * 127.1 + 311.7) * 43758.5453) % 1;
+
+  // Base green fill
+  ctx.fillStyle = '#4a8c28';
+  ctx.fillRect(0, 0, S, S);
+
+  // Scattered grass blades / patches
+  for (let i = 0; i < 400; i++) {
+    const x = rng(i * 3) * S, y = rng(i * 3 + 1) * S;
+    const r = 2 + rng(i * 3 + 2) * 4;
+    const g = Math.floor(110 + rng(i) * 60);
+    ctx.fillStyle = `rgb(${Math.floor(40 + rng(i+1)*50)},${g},${Math.floor(15 + rng(i+2)*25)})`;
+    ctx.beginPath();
+    ctx.ellipse(x, y, r * 0.4, r, rng(i) * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+const tileTexture = makeTileTexture();
+const grassTexture = makeGrassTexture();
+
+// ── Apply world-space UV + texture to a mesh ──────────────────────────────
+function applyWorldUV(mesh, texture, scaleMeters) {
+  const geo = mesh.geometry;
+  const pos = geo.attributes.position;
+  const uvArr = new Float32Array(pos.count * 2);
+  const s = 1 / scaleMeters;
+  for (let i = 0; i < pos.count; i++) {
+    uvArr[i * 2]     = pos.getX(i) * s;
+    uvArr[i * 2 + 1] = pos.getZ(i) * s;
+  }
+  geo.setAttribute('uv', new THREE.BufferAttribute(uvArr, 2));
+
+  // Preserve vertex colors blended with texture
+  mesh.material = new THREE.MeshLambertMaterial({
+    map: texture,
+    vertexColors: false,
+    transparent: mesh.material.transparent,
+    opacity: mesh.material.opacity,
+    side: THREE.DoubleSide,
+  });
+}
+
+// ── Load model ────────────────────────────────────────────────────────────
+const params = new URLSearchParams(location.search);
 const modelUrl = params.get('model') || 'model.glb';
 
-const loader = new GLTFLoader();
-loader.load(modelUrl, (gltf) => {
+new GLTFLoader().load(modelUrl, (gltf) => {
   gltf.scene.traverse((child) => {
-    if (child.isMesh) {
-      child.material.vertexColors = true;
-      if (child.material.transparent) {
-        child.material.depthWrite = false;
-      }
+    if (!child.isMesh) return;
+    const name = child.name || '';
+
+    if (name.includes('Envoirment') || name.includes('Environment')) {
+      applyWorldUV(child, tileTexture, 400);   // ~400mm tile repeat
+      return;
     }
+    if (name.includes('Ground')) {
+      applyWorldUV(child, grassTexture, 300);
+      return;
+    }
+
+    child.material.vertexColors = true;
+    if (child.material.transparent) child.material.depthWrite = false;
+    child.material.side = THREE.DoubleSide;
   });
 
   const box = new THREE.Box3().setFromObject(gltf.scene);
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3()).length();
   gltf.scene.position.sub(center);
-
   camera.position.set(0, size * 0.3, size * 1.4);
   camera.near = size * 0.001;
   camera.far = size * 10;
@@ -110,9 +207,9 @@ loader.load(modelUrl, (gltf) => {
   controls.minDistance = size * 0.01;
   controls.maxDistance = size * 5;
   controls.update();
-
   scene.add(gltf.scene);
   document.getElementById('loading').style.display = 'none';
+
 }, (xhr) => {
   if (xhr.total) {
     const pct = Math.round(xhr.loaded / xhr.total * 100);
@@ -124,12 +221,11 @@ loader.load(modelUrl, (gltf) => {
   console.error(err);
 });
 
-function animate() {
+(function animate() {
   requestAnimationFrame(animate);
   controls.update();
   renderer.render(scene, camera);
-}
-animate();
+})();
 </script>
 </body>
 </html>
