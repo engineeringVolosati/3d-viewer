@@ -3,54 +3,75 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>3D Viewer</title>
+<title>3D Viewer — RabbitPlayground</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: 100%; height: 100%; background: #1a1a1a; overflow: hidden; touch-action: none; }
+  html, body { width: 100%; height: 100%; background: #87ceeb; overflow: hidden; touch-action: none; }
   canvas { display: block; }
   #info {
     position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
-    color: #555; font-family: sans-serif; font-size: 12px;
+    color: rgba(0,0,0,0.35); font-family: sans-serif; font-size: 12px;
     pointer-events: none; text-align: center; white-space: nowrap;
   }
   #loading {
     position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-    color: #aaa; font-family: sans-serif; font-size: 14px;
-    text-align: center; line-height: 2;
+    color: #444; font-family: sans-serif; font-size: 14px;
+    text-align: center; line-height: 2; background: rgba(255,255,255,0.8);
+    padding: 20px 32px; border-radius: 12px;
   }
-  #bar { width: 200px; height: 3px; background: #333; border-radius: 2px; margin: 8px auto 0; }
+  #bar { width: 200px; height: 3px; background: #ccc; border-radius: 2px; margin: 8px auto 0; }
   #bar-fill { height: 100%; width: 0; background: #4af; border-radius: 2px; transition: width 0.2s; }
-  #fence-toggle {
+
+  /* Fence UI */
+  #fence-ui {
     display: none;
     position: fixed; top: 16px; right: 16px;
-    background: #2a2a2a; border: 1px solid #444; border-radius: 24px;
-    padding: 6px 14px 6px 10px;
-    color: #ccc; font-family: sans-serif; font-size: 12px;
-    cursor: pointer; user-select: none;
-    align-items: center; gap: 8px;
-    touch-action: manipulation;
+    font-family: sans-serif; font-size: 12px; user-select: none;
   }
-  #fence-toggle:active { background: #383838; }
-  .toggle-pill {
-    width: 32px; height: 18px; border-radius: 9px;
-    background: #555; position: relative; transition: background 0.2s; flex-shrink: 0;
+  #fence-btn {
+    background: rgba(255,255,255,0.9); border: 1px solid #ccc; border-radius: 24px;
+    padding: 6px 14px 6px 10px; color: #333; cursor: pointer;
+    display: flex; align-items: center; gap: 8px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15); touch-action: manipulation;
   }
-  .toggle-pill::after {
-    content: ''; position: absolute; top: 3px; left: 3px;
-    width: 12px; height: 12px; border-radius: 50%;
-    background: #aaa; transition: left 0.2s, background 0.2s;
+  #fence-btn:active { background: #f0f0f0; }
+  #fence-swatch {
+    width: 18px; height: 18px; border-radius: 50%;
+    background: #8C6126; border: 2px solid rgba(0,0,0,0.2); flex-shrink: 0;
   }
-  #fence-toggle.white .toggle-pill { background: #4af; }
-  #fence-toggle.white .toggle-pill::after { left: 17px; background: #fff; }
+  #fence-palette {
+    display: none; flex-wrap: wrap; width: 124px; gap: 6px;
+    position: absolute; top: calc(100% + 8px); right: 0;
+    background: rgba(255,255,255,0.95); border: 1px solid #ccc;
+    border-radius: 10px; padding: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+  }
+  #fence-palette.open { display: flex; }
+  .color-dot {
+    width: 24px; height: 24px; border-radius: 50%; cursor: pointer;
+    border: 2px solid transparent; transition: border-color 0.1s; flex-shrink: 0;
+  }
+  .color-dot:hover { border-color: #666; }
+  .color-dot.active { border-color: #000; }
+
+  /* Axis gizmo */
+  #axis-gizmo {
+    position: fixed; bottom: 48px; left: 16px;
+    width: 80px; height: 80px; pointer-events: none;
+  }
 </style>
 </head>
 <body>
 <div id="loading">Loading model…<div id="bar"><div id="bar-fill"></div></div></div>
 <div id="info"></div>
-<div id="fence-toggle" onclick="toggleFence()">
-  <div class="toggle-pill"></div>
-  <span id="fence-label">Забор: дерево</span>
+<div id="fence-ui">
+  <div id="fence-btn" onclick="togglePalette()">
+    <div id="fence-swatch"></div>
+    <span>Забор</span>
+  </div>
+  <div id="fence-palette"></div>
 </div>
+<canvas id="axis-gizmo"></canvas>
 
 <script type="importmap">
 {
@@ -70,29 +91,33 @@ document.getElementById('info').textContent = isMobile
   ? '1 finger: rotate · pinch: zoom · 2 fingers: pan'
   : 'drag: rotate · scroll: zoom · right-drag: pan';
 
-// ── Renderer ──────────────────────────────────────────────────────────────
+// ── Renderer ───────────────────────────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 
-// ── Scene ─────────────────────────────────────────────────────────────────
+// ── Scene ──────────────────────────────────────────────────────────────────
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x1a1a1a);
-scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-const sun = new THREE.DirectionalLight(0xffffff, 1.4);
-sun.position.set(5, 10, 7);
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.Fog(0x87ceeb, 200, 2000);
+scene.add(new THREE.AmbientLight(0xffffff, 1.2));
+const sun = new THREE.DirectionalLight(0xfff5e0, 2.0);
+sun.position.set(8, 12, 6);
 scene.add(sun);
-scene.add(Object.assign(new THREE.DirectionalLight(0xffffff, 0.4), { position: new THREE.Vector3(-5, -2, -5) }));
+const fillLight = new THREE.DirectionalLight(0xd0e8ff, 0.8);
+fillLight.position.set(-6, 4, -4);
+scene.add(fillLight);
 
-const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.001, 100000);
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.01, 100000);
 camera.position.set(1, 1, 2);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.screenSpacePanning = true;
+controls.maxPolarAngle = Math.PI / 2;
 controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
 
 window.addEventListener('resize', () => {
@@ -101,45 +126,63 @@ window.addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
-// ── Procedural textures ───────────────────────────────────────────────────
-function makeTileTexture() {
-  const S = 512, T = 64, seam = 3;
-  const c = document.createElement('canvas');
+// ── Procedural textures ────────────────────────────────────────────────────
+const rng = (s) => Math.abs((Math.sin(s * 127.1 + 311.7) * 43758.5453) % 1);
+
+function makeGrassTexture() {
+  const S = 256, c = document.createElement('canvas');
   c.width = c.height = S;
   const ctx = c.getContext('2d');
+  ctx.fillStyle = '#3d7a20'; ctx.fillRect(0, 0, S, S);
+  for (let i = 0; i < 60; i++) {
+    const x = rng(i*13)*S, y = rng(i*13+1)*S, r = 8+rng(i*13+2)*20;
+    ctx.fillStyle = `rgba(20,50,5,${0.3+rng(i)*0.35})`;
+    ctx.beginPath(); ctx.ellipse(x,y,r*0.6,r,rng(i)*Math.PI,0,Math.PI*2); ctx.fill();
+  }
+  for (let i = 0; i < 300; i++) {
+    const x = rng(i*3)*S, y = rng(i*3+1)*S, r = 2+rng(i*3+2)*6;
+    const g = Math.floor(80+rng(i)*90), rb = Math.floor(30+rng(i+1)*40);
+    ctx.fillStyle = `rgb(${rb},${g},${Math.floor(rng(i+2)*20)})`;
+    ctx.beginPath(); ctx.ellipse(x,y,r*0.35,r,rng(i)*Math.PI,0,Math.PI*2); ctx.fill();
+  }
+  for (let i = 0; i < 40; i++) {
+    const x = rng(i*19)*S, y = rng(i*19+1)*S, r = 3+rng(i*19+2)*8;
+    ctx.fillStyle = `rgba(140,120,30,${0.4+rng(i)*0.3})`;
+    ctx.beginPath(); ctx.ellipse(x,y,r*0.4,r,rng(i)*Math.PI,0,Math.PI*2); ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
 
-  for (let row = 0; row < S / T; row++) {
-    for (let col = 0; col < S / T; col++) {
-      const x = col * T, y = row * T;
-      // Alternate: red tiles + narrow gray center strip
-      const isCenter = col % 4 === 2;
-      if (isCenter) {
-        // Gray geometric tile
-        ctx.fillStyle = '#7a7870';
-        ctx.fillRect(x + seam, y + seam, T - seam * 2, T - seam * 2);
-        // Draw star/diamond inset
-        ctx.strokeStyle = '#5a5850';
-        ctx.lineWidth = 1.5;
-        const cx2 = x + T / 2, cy2 = y + T / 2, r = T * 0.3;
-        ctx.beginPath();
-        for (let i = 0; i < 8; i++) {
-          const a = (i * Math.PI) / 4;
-          const rr = i % 2 === 0 ? r : r * 0.5;
-          i === 0 ? ctx.moveTo(cx2 + rr * Math.cos(a), cy2 + rr * Math.sin(a))
-                  : ctx.lineTo(cx2 + rr * Math.cos(a), cy2 + rr * Math.sin(a));
-        }
-        ctx.closePath();
-        ctx.stroke();
-      } else {
-        // Red/terracotta tile with subtle variation
-        const v = (row + col) % 3 === 0 ? 8 : 0;
-        ctx.fillStyle = `rgb(${168 + v}, ${68 + v}, ${48 + v})`;
-        ctx.fillRect(x + seam, y + seam, T - seam * 2, T - seam * 2);
-      }
-      // Seam (dark grout)
-      ctx.fillStyle = '#2a2018';
-      ctx.fillRect(x, y, T, seam);
-      ctx.fillRect(x, y, seam, T);
+function makeShellstoneTexture() {
+  const S = 512, c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#c4a04a'; ctx.fillRect(0, 0, S, S);
+  // Shell inclusions (fine fossil marks)
+  for (let i = 0; i < 280; i++) {
+    const x = rng(i*5)*S, y = rng(i*5+1)*S, r = 2+rng(i*5+2)*14;
+    ctx.fillStyle = rng(i) > 0.45
+      ? `rgba(230,210,140,${0.2+rng(i)*0.5})`
+      : `rgba(85,60,12,${0.15+rng(i)*0.35})`;
+    ctx.beginPath(); ctx.ellipse(x,y,r*0.28,r,rng(i*3)*Math.PI,0,Math.PI*2); ctx.fill();
+  }
+  // Pitting / rough surface
+  for (let i = 0; i < 200; i++) {
+    const x = rng(i*7+99)*S, y = rng(i*7+100)*S, r = 1+rng(i*7+101)*3;
+    ctx.fillStyle = `rgba(55,38,8,${0.1+rng(i)*0.22})`;
+    ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+  }
+  // Masonry block joints
+  const BW = 100, BH = 48;
+  ctx.strokeStyle = 'rgba(60,42,10,0.55)'; ctx.lineWidth = 3;
+  for (let row = 0; row <= S/BH+1; row++) {
+    const y = row*BH, off = (row%2)*(BW/2);
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(S,y); ctx.stroke();
+    for (let col = -1; col <= S/BW+1; col++) {
+      const x = col*BW+off;
+      ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x,y+BH); ctx.stroke();
     }
   }
   const tex = new THREE.CanvasTexture(c);
@@ -147,143 +190,372 @@ function makeTileTexture() {
   return tex;
 }
 
-function makeGrassTexture() {
-  const S = 256;
-  const c = document.createElement('canvas');
+function makePavingTexture() {
+  const S = 512, c = document.createElement('canvas');
   c.width = c.height = S;
   const ctx = c.getContext('2d');
-  const rng = (s) => (Math.sin(s * 127.1 + 311.7) * 43758.5453) % 1;
+  // Dark grout background
+  ctx.fillStyle = '#4a4040'; ctx.fillRect(0, 0, S, S);
 
-  // Base green fill
-  ctx.fillStyle = '#4a8c28';
-  ctx.fillRect(0, 0, S, S);
+  const T = 80; // tile grid step (before rotation)
+  const grout = 4;
 
-  // Scattered grass blades / patches
-  for (let i = 0; i < 400; i++) {
-    const x = rng(i * 3) * S, y = rng(i * 3 + 1) * S;
-    const r = 2 + rng(i * 3 + 2) * 4;
-    const g = Math.floor(110 + rng(i) * 60);
-    ctx.fillStyle = `rgb(${Math.floor(40 + rng(i+1)*50)},${g},${Math.floor(15 + rng(i+2)*25)})`;
+  function drawDiamond(cx, cy, half, isGray, ri, ci) {
+    ctx.save();
     ctx.beginPath();
-    ctx.ellipse(x, y, r * 0.4, r, rng(i) * Math.PI, 0, Math.PI * 2);
+    ctx.moveTo(cx, cy - half);
+    ctx.lineTo(cx + half, cy);
+    ctx.lineTo(cx, cy + half);
+    ctx.lineTo(cx - half, cy);
+    ctx.closePath();
+    const v = (rng(ri * 37 + ci * 13) - 0.5) * 18;
+    if (isGray) {
+      const g = 145 + v;
+      ctx.fillStyle = `rgb(${g|0},${g|0},${(g-5)|0})`;
+    } else {
+      const r = 185 + v, g = 75 + v * 0.4;
+      ctx.fillStyle = `rgb(${r|0},${g|0},${(g*0.55)|0})`;
+    }
     ctx.fill();
+    // Subtle worn edges
+    ctx.strokeStyle = 'rgba(0,0,0,0.18)'; ctx.lineWidth = 1.2;
+    ctx.stroke();
+    // Star/compass emboss on gray tiles
+    if (isGray) {
+      const s1 = half * 0.55, s2 = half * 0.28;
+      ctx.strokeStyle = 'rgba(80,80,80,0.5)'; ctx.lineWidth = 1;
+      // Outer 4-point star
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - s1); ctx.lineTo(cx + s2*0.6, cy - s2*0.6);
+      ctx.lineTo(cx + s1, cy); ctx.lineTo(cx + s2*0.6, cy + s2*0.6);
+      ctx.lineTo(cx, cy + s1); ctx.lineTo(cx - s2*0.6, cy + s2*0.6);
+      ctx.lineTo(cx - s1, cy); ctx.lineTo(cx - s2*0.6, cy - s2*0.6);
+      ctx.closePath(); ctx.stroke();
+      // Inner diamond
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - s2); ctx.lineTo(cx + s2, cy);
+      ctx.lineTo(cx, cy + s2); ctx.lineTo(cx - s2, cy);
+      ctx.closePath(); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  const half = T / 2 - grout / 2;
+  // Diamond grid: rows at half-T offset
+  for (let row = -1; row < S / (T/2) + 2; row++) {
+    for (let col = -1; col < S / T + 2; col++) {
+      const off = (row % 2 + 2) % 2 * (T / 2);
+      const cx = col * T + off;
+      const cy = row * (T / 2);
+      // Gray center strip every 3 rows
+      const band = Math.floor(row / 2) % 3;
+      drawDiamond(cx, cy, half, band === 1, row, col);
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+function makeWireMeshTexture() {
+  const S = 512, c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, S, S);
+  const step = 21;
+  const wireW = Math.max(1.2, step * 0.13);
+  ctx.strokeStyle = '#8fa8ba'; ctx.lineWidth = wireW;
+  ctx.lineCap = 'square';
+  for (let x = 0; x <= S+step; x += step) {
+    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,S); ctx.stroke();
+  }
+  for (let y = 0; y <= S+step; y += step) {
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(S,y); ctx.stroke();
   }
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   return tex;
 }
 
-const tileTexture = makeTileTexture();
-const grassTexture = makeGrassTexture();
+function makeLeafTexture() {
+  const S = 256, c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#c8c8c8'; ctx.fillRect(0,0,S,S);
+  for (let i = 0; i < 120; i++) {
+    const x=rng(i*11)*S, y=rng(i*11+1)*S, r=6+rng(i*11+2)*18;
+    ctx.fillStyle = `rgba(0,0,0,${0.25+rng(i)*0.35})`;
+    ctx.beginPath(); ctx.ellipse(x,y,r*0.5,r,rng(i)*Math.PI,0,Math.PI*2); ctx.fill();
+  }
+  for (let i = 0; i < 200; i++) {
+    const x=rng(i*7)*S, y=rng(i*7+1)*S, r=2+rng(i*7+2)*8;
+    const v = Math.floor(200+rng(i)*55);
+    ctx.fillStyle = `rgb(${v},${v},${v})`;
+    ctx.beginPath(); ctx.ellipse(x,y,r*0.45,r,rng(i+50)*Math.PI,0,Math.PI*2); ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
 
-// ── Apply world-space UV + texture to a mesh ──────────────────────────────
-function applyWorldUV(mesh, texture, scaleMeters) {
+function makeCheckerTexture() {
+  const S = 128, c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#d0d0d0'; ctx.fillRect(0, 0, S, S);
+  ctx.fillStyle = '#909090';
+  ctx.fillRect(0, 0, S/2, S/2); ctx.fillRect(S/2, S/2, S/2, S/2);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+// ── Load animal textures ───────────────────────────────────────────────────
+const texLoader = new THREE.TextureLoader();
+function loadTex(path) {
+  const t = texLoader.load(path);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+const totorTex    = loadTex('textures/totoro.png');
+const pikachuTex  = loadTex('textures/pikachu.png');
+const ultimkTex   = loadTex('textures/ultimaker.jpg');
+const rabbitTex   = loadTex('textures/rabbit.jpg');
+
+const grassTex    = makeGrassTexture();
+const shellTex    = makeShellstoneTexture();
+const pavingTex   = makePavingTexture();
+const wireTex     = makeWireMeshTexture();
+const leafTex     = makeLeafTexture();
+
+// ── UV projection ──────────────────────────────────────────────────────────
+function applyWorldUV(mesh, texture, scaleMeters, opts = {}) {
   const geo = mesh.geometry;
   const pos = geo.attributes.position;
   const uvArr = new Float32Array(pos.count * 2);
   const s = 1 / scaleMeters;
+  const mode = opts.uvMode || 'xz';
   for (let i = 0; i < pos.count; i++) {
-    uvArr[i * 2]     = pos.getX(i) * s;
-    uvArr[i * 2 + 1] = pos.getZ(i) * s;
+    const u = mode === 'yz' ? pos.getZ(i) : pos.getX(i);
+    const v = mode === 'xz' ? pos.getZ(i) : pos.getY(i);
+    uvArr[i*2] = u*s; uvArr[i*2+1] = v*s;
   }
   geo.setAttribute('uv', new THREE.BufferAttribute(uvArr, 2));
-
-  // Preserve vertex colors blended with texture
-  mesh.material = new THREE.MeshLambertMaterial({
+  const mat = new THREE.MeshLambertMaterial({
     map: texture,
-    vertexColors: false,
-    transparent: mesh.material.transparent,
-    opacity: mesh.material.opacity,
+    color: opts.color ?? 0xffffff,
+    transparent: !!opts.transparent,
+    opacity: opts.opacity ?? 1,
+    depthWrite: !opts.transparent,
+    side: THREE.DoubleSide,
+  });
+  if (opts.alphaTest) mat.alphaTest = opts.alphaTest;
+  mesh.material = mat;
+}
+
+function solidMat(hex, opts = {}) {
+  return new THREE.MeshLambertMaterial({
+    color: new THREE.Color(hex),
+    transparent: !!opts.transparent,
+    opacity: opts.opacity ?? 1,
+    depthWrite: !opts.transparent,
     side: THREE.DoubleSide,
   });
 }
 
-// ── Fence toggle ──────────────────────────────────────────────────────────
+// ── Fence color palette ────────────────────────────────────────────────────
+const FENCE_COLORS = [
+  { hex: '#8C6126', label: 'Pine' },
+  { hex: '#C4A35A', label: 'Birch' },
+  { hex: '#5C3317', label: 'Dark oak' },
+  { hex: '#D4C5A9', label: 'Ash' },
+  { hex: '#B8BFC8', label: 'Steel' },
+  { hex: '#F5F5F5', label: 'White' },
+  { hex: '#202020', label: 'Black' },
+  { hex: '#888888', label: 'Gray' },
+  { hex: '#CC3333', label: 'Red' },
+  { hex: '#E07820', label: 'Orange' },
+  { hex: '#D8C830', label: 'Yellow' },
+  { hex: '#3A8F3A', label: 'Green' },
+  { hex: '#2060C0', label: 'Blue' },
+  { hex: '#7840B0', label: 'Purple' },
+  { hex: '#30B0B0', label: 'Cyan' },
+  { hex: '#9B4020', label: 'Rust' },
+];
+
 const fenceMeshes = [];
-let fenceWhite = false;
-const WHITE_MAT = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+let currentFenceHex = FENCE_COLORS[0].hex;
 
-function isFenceColor(mesh) {
-  // Pine wood COLOR_FENCE = uint8(140, 97, 38) — check first vertex color
-  const vc = mesh.geometry.attributes.color;
-  if (!vc) return false;
-  const r = Math.round(vc.getX(0) * 255);
-  const g = Math.round(vc.getY(0) * 255);
-  const b = Math.round(vc.getZ(0) * 255);
-  return Math.abs(r - 140) < 12 && Math.abs(g - 97) < 12 && Math.abs(b - 38) < 12;
+const palette = document.getElementById('fence-palette');
+FENCE_COLORS.forEach((clr, i) => {
+  const dot = document.createElement('div');
+  dot.className = 'color-dot' + (i === 0 ? ' active' : '');
+  dot.style.background = clr.hex; dot.title = clr.label;
+  dot.onclick = () => {
+    currentFenceHex = clr.hex;
+    const mat = new THREE.MeshLambertMaterial({ color: new THREE.Color(clr.hex), side: THREE.DoubleSide });
+    fenceMeshes.forEach(m => m.material = mat);
+    document.getElementById('fence-swatch').style.background = clr.hex;
+    palette.querySelectorAll('.color-dot').forEach(d => d.classList.remove('active'));
+    dot.classList.add('active');
+    palette.classList.remove('open');
+  };
+  palette.appendChild(dot);
+});
+
+let paletteOpen = false;
+function togglePalette() {
+  paletteOpen = !paletteOpen;
+  palette.classList.toggle('open', paletteOpen);
 }
+window.togglePalette = togglePalette;
+document.addEventListener('click', e => {
+  if (paletteOpen && !document.getElementById('fence-ui').contains(e.target)) {
+    paletteOpen = false; palette.classList.remove('open');
+  }
+}, true);
 
-function toggleFence() {
-  fenceWhite = !fenceWhite;
-  const btn = document.getElementById('fence-toggle');
-  btn.classList.toggle('white', fenceWhite);
-  document.getElementById('fence-label').textContent = fenceWhite ? 'Забор: белый' : 'Забор: дерево';
-  fenceMeshes.forEach(({ mesh, origMat }) => {
-    mesh.material = fenceWhite ? WHITE_MAT : origMat;
+// ── Axis gizmo (2D canvas) ─────────────────────────────────────────────────
+const gizmoEl = document.getElementById('axis-gizmo');
+const gCtx = gizmoEl.getContext('2d');
+const AXES = [
+  { dir: new THREE.Vector3(1,0,0), color: '#ff5050', label: 'X' },
+  { dir: new THREE.Vector3(0,1,0), color: '#50ff50', label: 'Y' },
+  { dir: new THREE.Vector3(0,0,1), color: '#5088ff', label: 'Z' },
+];
+const _invQ = new THREE.Quaternion();
+function drawGizmo() {
+  const W = gizmoEl.width, H = gizmoEl.height;
+  const cx = W/2, cy = H/2, len = W*0.34;
+  gCtx.clearRect(0,0,W,H);
+  _invQ.copy(camera.quaternion).invert();
+  const proj = AXES.map(ax => {
+    const v = ax.dir.clone().applyQuaternion(_invQ);
+    return { color: ax.color, label: ax.label, px: cx+v.x*len, py: cy-v.y*len, z: v.z };
+  }).sort((a,b) => a.z-b.z);
+  proj.forEach(({ color, label, px, py }) => {
+    gCtx.strokeStyle = color; gCtx.lineWidth = 2;
+    gCtx.beginPath(); gCtx.moveTo(cx,cy); gCtx.lineTo(px,py); gCtx.stroke();
+    const lx = cx+(px-cx)*1.3, ly = cy+(py-cy)*1.3;
+    gCtx.fillStyle = color; gCtx.font = 'bold 11px sans-serif';
+    gCtx.textAlign = 'center'; gCtx.textBaseline = 'middle';
+    gCtx.fillText(label, lx, ly);
   });
 }
-window.toggleFence = toggleFence;
 
-// ── Load model ────────────────────────────────────────────────────────────
-const params = new URLSearchParams(location.search);
-const modelUrl = params.get('model') || 'model.glb';
+// ── Load model ─────────────────────────────────────────────────────────────
+const modelUrl = new URLSearchParams(location.search).get('model') || 'model_v3.glb';
 
-new GLTFLoader().load(modelUrl, (gltf) => {
-  gltf.scene.traverse((child) => {
+new GLTFLoader().load(modelUrl, gltf => {
+
+  // glTF node names ≠ mesh names; build node-name → mesh-name map
+  const meshNameOf = new Map();
+  const gltfNodes = gltf.parser.json.nodes || [];
+  const gltfMeshes = gltf.parser.json.meshes || [];
+  gltfNodes.forEach(node => {
+    if (node.mesh !== undefined && node.name)
+      meshNameOf.set(node.name, gltfMeshes[node.mesh]?.name || '');
+  });
+
+  gltf.scene.traverse(child => {
     if (!child.isMesh) return;
-    const name = child.name || '';
+    // geometry.name is set by GLTFLoader to 'MeshName_primIndex'; strip suffix
+    const geoName = (child.geometry?.name || '').replace(/_\d+$/, '');
+    const n = meshNameOf.get(child.name) || geoName || child.name || '';
+    const nl = n.toLowerCase();
 
-    if (name.includes('Envoirment') || name.includes('Environment')) {
-      applyWorldUV(child, tileTexture, 400);   // ~400mm tile repeat
+    if (n.includes('Ground')) {
+      applyWorldUV(child, grassTex, 2.0);   // ~2m per tile
       return;
     }
-    if (name.includes('Ground')) {
-      applyWorldUV(child, grassTexture, 300);
+    if (n.includes('HouseWall')) {
+      applyWorldUV(child, shellTex, 0.8, { transparent: true, opacity: 0.75 }); // ~80cm block
       return;
     }
-
-    child.material.vertexColors = true;
-    if (child.material.transparent) child.material.depthWrite = false;
-    child.material.side = THREE.DoubleSide;
-
-    if (isFenceColor(child)) {
-      fenceMeshes.push({ mesh: child, origMat: child.material });
+    if (n.includes('Paving')) {
+      applyWorldUV(child, pavingTex, 1.5);  // ~1.5m per tile repeat
+      return;
     }
+    if (n.includes('FenceMesh')) {
+      applyWorldUV(child, wireTex, 0.4, { transparent: true, alphaTest: 0.08, uvMode: 'xy' });
+      return;
+    }
+    if (n.includes('FenceFrame')) {
+      child.material = solidMat(currentFenceHex);
+      fenceMeshes.push(child);
+      return;
+    }
+    if (n.includes('Tree') || n.includes('Arbre')) {
+      // green base × leaf texture = dappled foliage; brown trunk gets warm dapple
+      applyWorldUV(child, leafTex, 0.5, { color: 0x4a8828, transparent: true, opacity: 0.60 });
+      child.material.depthWrite = false;
+      return;
+    }
+    if (nl.includes('totoro')) {
+      child.material = solidMat(0x4a5c6a); return;
+    }
+    if (nl.includes('pikachu')) {
+      child.material = solidMat(0xf5c518); return;
+    }
+    if (nl.includes('tav') || nl.includes('rabbit')) {
+      child.material = solidMat(0xb89870); return;
+    }
+    if (nl.includes('ultimaker')) {
+      child.material = solidMat(0xc8ccc8); return; // light gray
+    }
+    if (nl.includes('pipe')) {
+      // Pipe: galvanized metal gray
+      child.material = new THREE.MeshLambertMaterial({ color: 0x7a8a90, side: THREE.DoubleSide });
+      return;
+    }
+    // Default: neutral gray
+    child.material = solidMat(0x909090);
   });
 
   const box = new THREE.Box3().setFromObject(gltf.scene);
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3()).length();
+  const minY = box.min.y - center.y; // ground level after centering
   gltf.scene.position.sub(center);
-  camera.position.set(0, size * 0.3, size * 1.4);
-  camera.near = size * 0.001;
-  camera.far = size * 10;
+
+  // Checkerboard ground plane
+  const checkerTex = makeCheckerTexture();
+  const cellSize = size * 0.05; // one checker cell ≈ 5% of model size
+  const planeSize = size * 8;
+  const repeats = planeSize / cellSize;
+  checkerTex.repeat.set(repeats / 2, repeats / 2);
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(planeSize, planeSize),
+    new THREE.MeshLambertMaterial({ map: checkerTex })
+  );
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = minY - 0.001;
+  scene.add(ground);
+  camera.position.set(0, size*0.3, size*1.4);
+  camera.near = size*0.001; camera.far = size*10;
   camera.updateProjectionMatrix();
-  controls.target.set(0, 0, 0);
-  controls.minDistance = size * 0.01;
-  controls.maxDistance = size * 5;
+  controls.target.set(0,0,0);
+  controls.minDistance = size*0.01;
+  controls.maxDistance = size*5;
   controls.update();
   scene.add(gltf.scene);
   document.getElementById('loading').style.display = 'none';
-  if (fenceMeshes.length > 0) {
-    document.getElementById('fence-toggle').style.display = 'flex';
-  }
+  if (fenceMeshes.length > 0) document.getElementById('fence-ui').style.display = 'block';
 
-}, (xhr) => {
-  const loaded = xhr.loaded;
+}, xhr => {
+  const el = document.getElementById('loading');
+  const fill = document.getElementById('bar-fill');
   if (xhr.total) {
-    const pct = Math.round(loaded / xhr.total * 100);
-    document.getElementById('loading').childNodes[0].textContent = `Загрузка… ${pct}%`;
-    document.getElementById('bar-fill').style.width = pct + '%';
-  } else if (loaded > 0) {
-    const mb = (loaded / 1048576).toFixed(1);
-    document.getElementById('loading').childNodes[0].textContent = `Загрузка… ${mb} MB`;
-    // animate bar so user sees progress
-    const approx = Math.min(loaded / (18 * 1048576) * 100, 95);
-    document.getElementById('bar-fill').style.width = approx + '%';
+    const pct = Math.round(xhr.loaded / xhr.total * 100);
+    el.childNodes[0].textContent = pct >= 100 ? 'Разбираю геометрию…' : `Загрузка… ${pct}%`;
+    fill.style.width = Math.min(pct, 100) + '%';
+  } else if (xhr.loaded > 0) {
+    el.childNodes[0].textContent = `Загрузка… ${(xhr.loaded/1048576).toFixed(1)} MB`;
+    fill.style.width = '60%';
   }
-}, (err) => {
-  document.getElementById('loading').textContent = 'Error: ' + (err.message || err);
+}, err => {
+  document.getElementById('loading').textContent = 'Ошибка: ' + (err.message || err);
   console.error(err);
 });
 
@@ -291,6 +563,7 @@ new GLTFLoader().load(modelUrl, (gltf) => {
   requestAnimationFrame(animate);
   controls.update();
   renderer.render(scene, camera);
+  drawGizmo();
 })();
 </script>
 </body>
